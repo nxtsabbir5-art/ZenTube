@@ -1,0 +1,94 @@
+name: Build ZenTube APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '*.zip'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ZenTube
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Find and Extract Source ZIP
+        shell: bash
+        run: |
+          set -e
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "::error::Source ZIP not found in repository root"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/zentube-source"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/zentube-source"
+
+          PROJECT_DIR=$(find "$RUNNER_TEMP/zentube-source" \
+            -name settings.gradle -printf '%h\n' | head -n 1)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "::error::Android project not found in ZIP"
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Download Required Submodules
+        run: |
+          set -e
+          git clone --depth 1 \
+            https://github.com/yashoncode/SharedModules.git \
+            "$PROJECT_DIR/SharedModules"
+
+          git clone --depth 1 \
+            https://github.com/yashoncode/MediaServiceCore.git \
+            "$PROJECT_DIR/MediaServiceCore"
+
+      - name: Setup Gradle
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --version
+
+      - name: Build ZenTube APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          ./gradlew :mobile:assembleStmobileRelease \
+            -Pfdroid \
+            --no-daemon \
+            --stacktrace
+
+      - name: Collect APK Files
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+
+          cp mobile/build/outputs/renamed_apks/stmobileRelease/*.apk \
+            "$GITHUB_WORKSPACE/dist/"
+
+          ls -lh "$GITHUB_WORKSPACE/dist"
+
+      - name: Upload ZenTube APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZenTube-APK
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 14
